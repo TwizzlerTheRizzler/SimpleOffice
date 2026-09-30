@@ -11,12 +11,17 @@
 #include <QTextStream>
 #include <QFile>
 #include <QRegularExpression>
-#include <QTextDocumentWriter>
+#include <QMessageBox>
+#include <QCloseEvent>
+#include <QFileInfo>
+#include <QIcon>
+#include <QKeySequence>
 
 class WordProcessor : public QMainWindow {
 public:
     WordProcessor(QWidget *parent = nullptr) : QMainWindow(parent) {
-        setWindowTitle("Simple Word Processor");
+        updateWindowTitle();
+        setWindowIcon(QIcon(":/icon.ico"));
         resize(900, 650);
 
         editor = new QTextEdit(this);
@@ -29,34 +34,100 @@ public:
         connect(editor, &QTextEdit::cursorPositionChanged, this, &WordProcessor::updateFormatToolbar);
     }
 
+protected:
+    void closeEvent(QCloseEvent *event) override {
+        if (maybeSave()) {
+            event->accept();
+        } else {
+            event->ignore();
+        }
+    }
+
 private:
     QTextEdit *editor;
     QString currentFilePath;
     QLabel *statusLabel;
 
+    QAction *actUndo;
+    QAction *actRedo;
     QAction *actBold;
     QAction *actItalic;
     QAction *actUnderline;
     QFontComboBox *fontCombo;
     QSpinBox *sizeSpinBox;
 
+    void updateWindowTitle() {
+        if (currentFilePath.isEmpty()) {
+            setWindowTitle("New Document - Simple Word Processor");
+        } else {
+            QFileInfo fileInfo(currentFilePath);
+            setWindowTitle(fileInfo.fileName() + " - Simple Word Processor");
+        }
+    }
+
+    bool maybeSave() {
+        if (!editor->document()->isModified()) {
+            return true;
+        }
+
+        QMessageBox::StandardButton ret = QMessageBox::warning(
+            this,
+            "Unsaved Changes",
+            "The document has been modified.\nDo you want to save your changes?",
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel
+        );
+
+        if (ret == QMessageBox::Save) {
+            return saveFile();
+        } else if (ret == QMessageBox::Cancel) {
+            return false;
+        }
+        return true;
+    }
+
     void setupToolBar() {
         QToolBar *toolbar = addToolBar("Main Toolbar");
         toolbar->setMovable(false);
 
+        // Styling: Enabled buttons show white text; disabled buttons stay grey
+        toolbar->setStyleSheet(
+            "QToolButton { color: #ffffff; background: transparent; padding: 3px 6px; border-radius: 3px; }"
+            "QToolButton:hover { background-color: #3e3e42; }"
+            "QToolButton:disabled { color: #666666; }"
+        );
+
         // File Operations
         QAction *actNew = toolbar->addAction("New");
         connect(actNew, &QAction::triggered, this, [this]() {
-            editor->clear();
-            currentFilePath.clear();
-            setWindowTitle("Simple Word Processor - New Document");
+            if (maybeSave()) {
+                editor->clear();
+                editor->document()->setModified(false);
+                currentFilePath.clear();
+                updateWindowTitle();
+            }
         });
 
         QAction *actOpen = toolbar->addAction("Open");
-        connect(actOpen, &QAction::triggered, this, &WordProcessor::openFile);
+        connect(actOpen, &QAction::triggered, this, [this]() { openFile(); });
 
         QAction *actSave = toolbar->addAction("Save");
-        connect(actSave, &QAction::triggered, this, &WordProcessor::saveFile);
+        connect(actSave, &QAction::triggered, this, [this]() { saveFile(); });
+
+        toolbar->addSeparator();
+
+        // Undo & Redo Operations
+        actUndo = toolbar->addAction("Undo");
+        actUndo->setShortcut(QKeySequence::Undo);
+        actUndo->setEnabled(false);
+        connect(actUndo, &QAction::triggered, editor, &QTextEdit::undo);
+
+        actRedo = toolbar->addAction("Redo");
+        actRedo->setShortcut(QKeySequence::Redo);
+        actRedo->setEnabled(false);
+        connect(actRedo, &QAction::triggered, editor, &QTextEdit::redo);
+
+        connect(editor, &QTextEdit::undoAvailable, actUndo, &QAction::setEnabled);
+        connect(editor, &QTextEdit::redoAvailable, actRedo, &QAction::setEnabled);
 
         toolbar->addSeparator();
 
@@ -110,7 +181,7 @@ private:
 
         toolbar->addSeparator();
 
-        // Google Docs Style Font Size Control (- Number +)
+        // Font Size Control
         QAction *actDecreaseFont = toolbar->addAction("-");
 
         sizeSpinBox = new QSpinBox(this);
@@ -156,8 +227,9 @@ private:
         actUnderline->setChecked(fmt.fontUnderline());
         fontCombo->setCurrentFont(fmt.font());
 
-        if (fmt.fontPointSize() > 0) {
-            sizeSpinBox->setValue(qRound(fmt.fontPointSize()));
+        qreal ptSize = fmt.fontPointSize();
+        if (ptSize > 0) {
+            sizeSpinBox->setValue(qRound(ptSize));
         } else {
             sizeSpinBox->setValue(12);
         }
@@ -184,59 +256,67 @@ private:
     }
 
     void openFile() {
+        if (!maybeSave()) return;
+
         QString fileName = QFileDialog::getOpenFileName(
             this,
             "Open File",
             "",
-            "All Supported (*.html *.htm *.txt *.odt);;OpenDocument Text (*.odt);;HTML Files (*.html *.htm);;Text Files (*.txt)"
+            "Supported Files (*.html *.htm *.md *.txt);;HTML Files (*.html *.htm);;Markdown Files (*.md);;Text Files (*.txt)"
         );
 
         if (!fileName.isEmpty()) {
             QFile file(fileName);
-            if (file.open(QIODevice::ReadOnly)) {
+            if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream in(&file);
+                QString content = in.readAll();
+                file.close();
+
                 if (fileName.endsWith(".html", Qt::CaseInsensitive) || fileName.endsWith(".htm", Qt::CaseInsensitive)) {
-                    QTextStream in(&file);
-                    editor->setHtml(in.readAll());
-                } else if (fileName.endsWith(".txt", Qt::CaseInsensitive)) {
-                    QTextStream in(&file);
-                    editor->setPlainText(in.readAll());
+                    editor->setHtml(content);
+                } else if (fileName.endsWith(".md", Qt::CaseInsensitive)) {
+                    editor->setMarkdown(content);
                 } else {
-                    QTextStream in(&file);
-                    editor->setPlainText(in.readAll());
+                    editor->setPlainText(content);
                 }
+
                 currentFilePath = fileName;
-                setWindowTitle("Simple Word Processor - " + fileName);
+                editor->document()->setModified(false);
+                updateWindowTitle();
             }
         }
     }
 
-    void saveFile() {
+    bool saveFile() {
         if (currentFilePath.isEmpty()) {
             currentFilePath = QFileDialog::getSaveFileName(
                 this,
                 "Save File",
                 "",
-                "OpenDocument Text (*.odt);;HTML Files (*.html);;Text Files (*.txt)"
+                "HTML Files (*.html);;Markdown Files (*.md);;Text Files (*.txt)"
             );
+            if (currentFilePath.isEmpty()) {
+                return false;
+            }
         }
 
-        if (!currentFilePath.isEmpty()) {
-            if (currentFilePath.endsWith(".odt", Qt::CaseInsensitive)) {
-                QTextDocumentWriter writer(currentFilePath, "ODF");
-                writer.write(editor->document());
+        QFile file(currentFilePath);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&file);
+            if (currentFilePath.endsWith(".html", Qt::CaseInsensitive) || currentFilePath.endsWith(".htm", Qt::CaseInsensitive)) {
+                out << editor->toHtml();
+            } else if (currentFilePath.endsWith(".md", Qt::CaseInsensitive)) {
+                out << editor->toMarkdown();
             } else {
-                QFile file(currentFilePath);
-                if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                    QTextStream out(&file);
-                    if (currentFilePath.endsWith(".txt", Qt::CaseInsensitive)) {
-                        out << editor->toPlainText();
-                    } else {
-                        out << editor->toHtml();
-                    }
-                }
+                out << editor->toPlainText();
             }
-            setWindowTitle("Simple Word Processor - " + currentFilePath);
+            file.close();
+            editor->document()->setModified(false);
+            updateWindowTitle();
+            return true;
         }
+
+        return false;
     }
 };
 
