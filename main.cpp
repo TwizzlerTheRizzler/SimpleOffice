@@ -16,6 +16,10 @@
 #include <QFileInfo>
 #include <QIcon>
 #include <QKeySequence>
+#include <QKeyEvent>
+#include <QList>
+#include <QTimer>
+#include <QTextDocumentWriter>
 
 class WordProcessor : public QMainWindow {
 public:
@@ -26,9 +30,12 @@ public:
 
         editor = new QTextEdit(this);
         setCentralWidget(editor);
+        editor->installEventFilter(this);
 
         setupToolBar();
         setupStatusBar();
+
+        saveUndoState();
 
         connect(editor, &QTextEdit::textChanged, this, &WordProcessor::updateWordCount);
         connect(editor, &QTextEdit::cursorPositionChanged, this, &WordProcessor::updateFormatToolbar);
@@ -43,6 +50,20 @@ protected:
         }
     }
 
+    bool eventFilter(QObject *obj, QEvent *event) override {
+        if (obj == editor && event->type() == QEvent::KeyPress) {
+            QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
+            int key = keyEvent->key();
+            QString text = keyEvent->text();
+
+            if (key == Qt::Key_Space || key == Qt::Key_Return || key == Qt::Key_Enter ||
+                key == Qt::Key_Tab || (!text.isEmpty() && text.at(0).isPunct())) {
+                QTimer::singleShot(0, this, [this]() { saveUndoState(); });
+            }
+        }
+        return QMainWindow::eventFilter(obj, event);
+    }
+
 private:
     QTextEdit *editor;
     QString currentFilePath;
@@ -55,6 +76,65 @@ private:
     QAction *actUnderline;
     QFontComboBox *fontCombo;
     QSpinBox *sizeSpinBox;
+
+    QList<QString> undoStack;
+    QList<QString> redoStack;
+    const int MAX_UNDO_LIMIT = 15;
+    bool isUndoRedoOperation = false;
+
+    void saveUndoState() {
+        if (isUndoRedoOperation) return;
+
+        QString currentState = editor->toHtml();
+        if (!undoStack.isEmpty() && undoStack.last() == currentState) {
+            return;
+        }
+
+        undoStack.append(currentState);
+        if (undoStack.size() > MAX_UNDO_LIMIT) {
+            undoStack.removeFirst();
+        }
+        redoStack.clear();
+        updateUndoRedoStates();
+    }
+
+    void undo() {
+        if (undoStack.size() <= 1) return;
+
+        isUndoRedoOperation = true;
+        redoStack.append(editor->toHtml());
+        undoStack.removeLast();
+
+        QString previousState = undoStack.last();
+        editor->setHtml(previousState);
+        editor->moveCursor(QTextCursor::End);
+
+        isUndoRedoOperation = false;
+        updateUndoRedoStates();
+    }
+
+    void redo() {
+        if (redoStack.isEmpty()) return;
+
+        isUndoRedoOperation = true;
+
+        QString nextState = redoStack.takeLast();
+        undoStack.append(nextState);
+        if (undoStack.size() > MAX_UNDO_LIMIT) {
+            undoStack.removeFirst();
+        }
+
+        editor->setHtml(nextState);
+        editor->moveCursor(QTextCursor::End);
+
+        isUndoRedoOperation = false;
+        updateUndoRedoStates();
+    }
+
+    void updateUndoRedoStates() {
+        actUndo->setEnabled(undoStack.size() > 1);
+        actRedo->setEnabled(!redoStack.isEmpty());
+    }
 
     void updateWindowTitle() {
         if (currentFilePath.isEmpty()) {
@@ -89,7 +169,6 @@ private:
         QToolBar *toolbar = addToolBar("Main Toolbar");
         toolbar->setMovable(false);
 
-        // Styling: Enabled buttons show white text; disabled buttons stay grey
         toolbar->setStyleSheet(
             "QToolButton { color: #ffffff; background: transparent; padding: 3px 6px; border-radius: 3px; }"
             "QToolButton:hover { background-color: #3e3e42; }"
@@ -103,6 +182,9 @@ private:
                 editor->clear();
                 editor->document()->setModified(false);
                 currentFilePath.clear();
+                undoStack.clear();
+                redoStack.clear();
+                saveUndoState();
                 updateWindowTitle();
             }
         });
@@ -119,15 +201,12 @@ private:
         actUndo = toolbar->addAction("Undo");
         actUndo->setShortcut(QKeySequence::Undo);
         actUndo->setEnabled(false);
-        connect(actUndo, &QAction::triggered, editor, &QTextEdit::undo);
+        connect(actUndo, &QAction::triggered, this, &WordProcessor::undo);
 
         actRedo = toolbar->addAction("Redo");
         actRedo->setShortcut(QKeySequence::Redo);
         actRedo->setEnabled(false);
-        connect(actRedo, &QAction::triggered, editor, &QTextEdit::redo);
-
-        connect(editor, &QTextEdit::undoAvailable, actUndo, &QAction::setEnabled);
-        connect(editor, &QTextEdit::redoAvailable, actRedo, &QAction::setEnabled);
+        connect(actRedo, &QAction::triggered, this, &WordProcessor::redo);
 
         toolbar->addSeparator();
 
@@ -138,6 +217,7 @@ private:
             QTextCharFormat fmt;
             fmt.setFontWeight(checked ? QFont::Bold : QFont::Normal);
             editor->mergeCurrentCharFormat(fmt);
+            saveUndoState();
         });
 
         actItalic = toolbar->addAction("I");
@@ -146,6 +226,7 @@ private:
             QTextCharFormat fmt;
             fmt.setFontItalic(checked);
             editor->mergeCurrentCharFormat(fmt);
+            saveUndoState();
         });
 
         actUnderline = toolbar->addAction("U");
@@ -154,19 +235,29 @@ private:
             QTextCharFormat fmt;
             fmt.setFontUnderline(checked);
             editor->mergeCurrentCharFormat(fmt);
+            saveUndoState();
         });
 
         toolbar->addSeparator();
 
         // Alignment
         QAction *actLeft = toolbar->addAction("Left");
-        connect(actLeft, &QAction::triggered, this, [this]() { editor->setAlignment(Qt::AlignLeft); });
+        connect(actLeft, &QAction::triggered, this, [this]() {
+            editor->setAlignment(Qt::AlignLeft);
+            saveUndoState();
+        });
 
         QAction *actCenter = toolbar->addAction("Center");
-        connect(actCenter, &QAction::triggered, this, [this]() { editor->setAlignment(Qt::AlignCenter); });
+        connect(actCenter, &QAction::triggered, this, [this]() {
+            editor->setAlignment(Qt::AlignCenter);
+            saveUndoState();
+        });
 
         QAction *actRight = toolbar->addAction("Right");
-        connect(actRight, &QAction::triggered, this, [this]() { editor->setAlignment(Qt::AlignRight); });
+        connect(actRight, &QAction::triggered, this, [this]() {
+            editor->setAlignment(Qt::AlignRight);
+            saveUndoState();
+        });
 
         toolbar->addSeparator();
 
@@ -176,6 +267,7 @@ private:
             QTextCharFormat fmt;
             fmt.setFont(f);
             editor->mergeCurrentCharFormat(fmt);
+            saveUndoState();
         });
         toolbar->addWidget(fontCombo);
 
@@ -210,6 +302,7 @@ private:
             QTextCharFormat fmt;
             fmt.setFontPointSize(newSize);
             editor->mergeCurrentCharFormat(fmt);
+            saveUndoState();
         });
     }
 
@@ -282,6 +375,9 @@ private:
 
                 currentFilePath = fileName;
                 editor->document()->setModified(false);
+                undoStack.clear();
+                redoStack.clear();
+                saveUndoState();
                 updateWindowTitle();
             }
         }
@@ -292,12 +388,23 @@ private:
             currentFilePath = QFileDialog::getSaveFileName(
                 this,
                 "Save File",
-                "",
-                "HTML Files (*.html);;Markdown Files (*.md);;Text Files (*.txt)"
+                "Untitled.html", // Pre-populates default file name in Save dialog
+                "HTML Files (*.html *.htm);;OpenDocument Text (*.odt);;Markdown Files (*.md);;Text Files (*.txt)"
             );
             if (currentFilePath.isEmpty()) {
                 return false;
             }
+        }
+
+        // Export directly as OpenDocument Text (.odt) using Qt's ODF writer
+        if (currentFilePath.endsWith(".odt", Qt::CaseInsensitive)) {
+            QTextDocumentWriter writer(currentFilePath, "ODF");
+            if (writer.write(editor->document())) {
+                editor->document()->setModified(false);
+                updateWindowTitle();
+                return true;
+            }
+            return false;
         }
 
         QFile file(currentFilePath);
