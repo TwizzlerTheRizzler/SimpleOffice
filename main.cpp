@@ -31,20 +31,23 @@
 class WordProcessor : public QMainWindow {
 public:
     WordProcessor(QWidget *parent = nullptr) : QMainWindow(parent) {
-        setupPageCanvas();
-        setupToolBar();
-        setupStatusBar();
+    setupPageCanvas();
+    setupToolBar();
+    setupStatusBar();
 
-        updateWindowTitle();
-        setWindowIcon(QIcon(":/icon.ico"));
-        resize(1000, 750);
+    updateWindowTitle();
+    setWindowIcon(QIcon(":/icon.ico"));
+    resize(1000, 750);
 
-        updatePageSize();
-        saveUndoState();
+    updatePageSize();
+    saveUndoState();
 
-        connect(editor, &QTextEdit::textChanged, this, &WordProcessor::updateWordCount);
-        connect(editor, &QTextEdit::cursorPositionChanged, this, &WordProcessor::updateFormatToolbar);
-    }
+    connect(editor, &QTextEdit::textChanged, this, &WordProcessor::updateWordCount);
+    connect(editor, &QTextEdit::cursorPositionChanged, this, &WordProcessor::updateFormatToolbar);
+
+    // Reset the modified flag so a fresh launch starts completely clean
+    editor->document()->setModified(false);
+}
 
 protected:
     void closeEvent(QCloseEvent *event) override {
@@ -195,10 +198,10 @@ private:
 
     void updateWindowTitle() {
         if (currentFilePath.isEmpty()) {
-            setWindowTitle("New Document - Simple Word Processor");
+            setWindowTitle("New Document - SimpleWrite");
         } else {
             QFileInfo fileInfo(currentFilePath);
-            setWindowTitle(fileInfo.fileName() + " - Simple Word Processor");
+            setWindowTitle(fileInfo.fileName() + " - SimpleWrite");
         }
     }
 
