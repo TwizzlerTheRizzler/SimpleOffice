@@ -6,6 +6,7 @@
 #include <QFileDialog>
 #include <QFontComboBox>
 #include <QSpinBox>
+#include <QDoubleSpinBox>
 #include <QStatusBar>
 #include <QLabel>
 #include <QTextStream>
@@ -20,21 +21,25 @@
 #include <QList>
 #include <QTimer>
 #include <QTextDocumentWriter>
+#include <QScrollArea>
+#include <QVBoxLayout>
+#include <QScreen>
+#include <QGuiApplication>
+#include <QStyleFactory>
+#include <QPalette>
 
 class WordProcessor : public QMainWindow {
 public:
     WordProcessor(QWidget *parent = nullptr) : QMainWindow(parent) {
-        updateWindowTitle();
-        setWindowIcon(QIcon(":/icon.ico"));
-        resize(900, 650);
-
-        editor = new QTextEdit(this);
-        setCentralWidget(editor);
-        editor->installEventFilter(this);
-
+        setupPageCanvas();
         setupToolBar();
         setupStatusBar();
 
+        updateWindowTitle();
+        setWindowIcon(QIcon(":/icon.ico"));
+        resize(1000, 750);
+
+        updatePageSize();
         saveUndoState();
 
         connect(editor, &QTextEdit::textChanged, this, &WordProcessor::updateWordCount);
@@ -66,6 +71,12 @@ protected:
 
 private:
     QTextEdit *editor;
+    QScrollArea *scrollArea;
+    QWidget *pageContainer;
+
+    QDoubleSpinBox *pageWidthSpinBox;
+    QDoubleSpinBox *pageHeightSpinBox;
+
     QString currentFilePath;
     QLabel *statusLabel;
 
@@ -81,6 +92,52 @@ private:
     QList<QString> redoStack;
     const int MAX_UNDO_LIMIT = 15;
     bool isUndoRedoOperation = false;
+
+    void setupPageCanvas() {
+        // Off-white workspace background
+        scrollArea = new QScrollArea(this);
+        scrollArea->setWidgetResizable(true);
+        scrollArea->setAlignment(Qt::AlignCenter);
+        scrollArea->setStyleSheet("QScrollArea { background-color: #e8e8e8; border: none; }");
+
+        pageContainer = new QWidget(scrollArea);
+        pageContainer->setStyleSheet("background-color: #e8e8e8;");
+
+        QVBoxLayout *containerLayout = new QVBoxLayout(pageContainer);
+        containerLayout->setAlignment(Qt::AlignCenter);
+        containerLayout->setContentsMargins(40, 40, 40, 40);
+
+        // Pure white paper sheet
+        editor = new QTextEdit(pageContainer);
+        editor->installEventFilter(this);
+        editor->setStyleSheet(
+            "QTextEdit {"
+            "   background-color: #ffffff;"
+            "   color: #111111;"
+            "   border: 1px solid #cccccc;"
+            "   padding: 20px;"
+            "}"
+        );
+        editor->document()->setDocumentMargin(20);
+
+        containerLayout->addWidget(editor);
+        scrollArea->setWidget(pageContainer);
+        setCentralWidget(scrollArea);
+    }
+
+    void updatePageSize() {
+        double widthCm = pageWidthSpinBox->value();
+        double heightCm = pageHeightSpinBox->value();
+
+        QScreen *screen = QGuiApplication::primaryScreen();
+        double dpiX = screen ? screen->logicalDotsPerInchX() : 96.0;
+        double dpiY = screen ? screen->logicalDotsPerInchY() : 96.0;
+
+        int widthPx = qRound(widthCm * (dpiX / 2.54));
+        int heightPx = qRound(heightCm * (dpiY / 2.54));
+
+        editor->setFixedSize(widthPx, heightPx);
+    }
 
     void saveUndoState() {
         if (isUndoRedoOperation) return;
@@ -169,10 +226,25 @@ private:
         QToolBar *toolbar = addToolBar("Main Toolbar");
         toolbar->setMovable(false);
 
+        // Explicit light-mode styling for toolbar and input fields
         toolbar->setStyleSheet(
-            "QToolButton { color: #ffffff; background: transparent; padding: 3px 6px; border-radius: 3px; }"
-            "QToolButton:hover { background-color: #3e3e42; }"
-            "QToolButton:disabled { color: #666666; }"
+            "QToolBar { background-color: #f5f5f5; border-bottom: 1px solid #dcdcdc; padding: 2px; }"
+            "QToolButton { color: #222222; background: transparent; padding: 4px 8px; border-radius: 3px; font-weight: bold; font-size: 13px; }"
+            "QToolButton:hover { background-color: #e0e0e0; }"
+            "QToolButton:checked { background-color: #d0d0d0; font-weight: bold; }"
+            "QToolButton:disabled { color: #a0a0a0; }"
+            "QLabel { color: #333333; padding-left: 4px; padding-right: 2px; }"
+            "QSpinBox, QDoubleSpinBox, QFontComboBox {"
+            "   background-color: #ffffff;"
+            "   color: #222222;"
+            "   border: 1px solid #cccccc;"
+            "   border-radius: 3px;"
+            "   padding: 2px 4px;"
+            "}"
+            "QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
+            "   background-color: #e8e8e8;"
+            "   border: none;"
+            "}"
         );
 
         // File Operations
@@ -194,6 +266,38 @@ private:
 
         QAction *actSave = toolbar->addAction("Save");
         connect(actSave, &QAction::triggered, this, [this]() { saveFile(); });
+
+        toolbar->addSeparator();
+
+        // Page Dimension Controls (cm)
+        QLabel *lblPage = new QLabel("Page Size (cm):", this);
+        toolbar->addWidget(lblPage);
+
+        pageWidthSpinBox = new QDoubleSpinBox(this);
+        pageWidthSpinBox->setRange(5.0, 100.0);
+        pageWidthSpinBox->setValue(21.0);
+        pageWidthSpinBox->setSingleStep(0.5);
+        pageWidthSpinBox->setSuffix(" cm");
+        pageWidthSpinBox->setFixedWidth(75);
+        toolbar->addWidget(pageWidthSpinBox);
+
+        QLabel *lblX = new QLabel("x", this);
+        toolbar->addWidget(lblX);
+
+        pageHeightSpinBox = new QDoubleSpinBox(this);
+        pageHeightSpinBox->setRange(5.0, 100.0);
+        pageHeightSpinBox->setValue(29.7);
+        pageHeightSpinBox->setSingleStep(0.5);
+        pageHeightSpinBox->setSuffix(" cm");
+        pageHeightSpinBox->setFixedWidth(75);
+        toolbar->addWidget(pageHeightSpinBox);
+
+        connect(pageWidthSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
+            updatePageSize();
+        });
+        connect(pageHeightSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
+            updatePageSize();
+        });
 
         toolbar->addSeparator();
 
@@ -273,8 +377,8 @@ private:
 
         toolbar->addSeparator();
 
-        // Font Size Control
-        QAction *actDecreaseFont = toolbar->addAction("-");
+        // Font Size Control with thick Unicode minus sign ("−")
+        QAction *actDecreaseFont = toolbar->addAction("−");
 
         sizeSpinBox = new QSpinBox(this);
         sizeSpinBox->setRange(1, 144);
@@ -336,7 +440,10 @@ private:
 
     void setupStatusBar() {
         statusLabel = new QLabel("Words: 0 | Characters: 0", this);
-        statusBar()->setStyleSheet("QStatusBar::item { border: none; }");
+        statusBar()->setStyleSheet(
+            "QStatusBar { background-color: #f5f5f5; color: #333333; border-top: 1px solid #dcdcdc; }"
+            "QStatusBar::item { border: none; }"
+        );
         statusBar()->setSizeGripEnabled(false);
         statusBar()->addWidget(statusLabel);
     }
@@ -385,18 +492,25 @@ private:
 
     bool saveFile() {
         if (currentFilePath.isEmpty()) {
+            QString selectedFilter = "OpenDocument Text (*.odt)";
+
             currentFilePath = QFileDialog::getSaveFileName(
                 this,
                 "Save File",
-                "Untitled.html", // Pre-populates default file name in Save dialog
-                "HTML Files (*.html *.htm);;OpenDocument Text (*.odt);;Markdown Files (*.md);;Text Files (*.txt)"
+                "Untitled.odt",
+                "OpenDocument Text (*.odt);;HTML Files (*.html *.htm);;Markdown Files (*.md);;Text Files (*.txt)",
+                &selectedFilter
             );
+
             if (currentFilePath.isEmpty()) {
                 return false;
             }
+
+            if (!currentFilePath.contains('.')) {
+                currentFilePath += ".odt";
+            }
         }
 
-        // Export directly as OpenDocument Text (.odt) using Qt's ODF writer
         if (currentFilePath.endsWith(".odt", Qt::CaseInsensitive)) {
             QTextDocumentWriter writer(currentFilePath, "ODF");
             if (writer.write(editor->document())) {
@@ -429,6 +543,26 @@ private:
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
+
+    // Force Fusion style and explicit light palette regardless of OS dark mode
+    app.setStyle(QStyleFactory::create("Fusion"));
+
+    QPalette lightPalette;
+    lightPalette.setColor(QPalette::Window, QColor(245, 245, 245));
+    lightPalette.setColor(QPalette::WindowText, QColor(34, 34, 34));
+    lightPalette.setColor(QPalette::Base, QColor(255, 255, 255));
+    lightPalette.setColor(QPalette::AlternateBase, QColor(240, 240, 240));
+    lightPalette.setColor(QPalette::ToolTipBase, QColor(255, 255, 255));
+    lightPalette.setColor(QPalette::ToolTipText, QColor(34, 34, 34));
+    lightPalette.setColor(QPalette::Text, QColor(34, 34, 34));
+    lightPalette.setColor(QPalette::Button, QColor(245, 245, 245));
+    lightPalette.setColor(QPalette::ButtonText, QColor(34, 34, 34));
+    lightPalette.setColor(QPalette::BrightText, Qt::red);
+    lightPalette.setColor(QPalette::Link, QColor(42, 130, 218));
+    lightPalette.setColor(QPalette::Highlight, QColor(42, 130, 218));
+    lightPalette.setColor(QPalette::HighlightedText, Qt::white);
+    app.setPalette(lightPalette);
+
     WordProcessor window;
     window.show();
     return app.exec();
