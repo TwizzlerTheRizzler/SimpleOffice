@@ -1,3 +1,4 @@
+#include <QPushButton>
 #include <QApplication>
 #include <QMainWindow>
 #include <QTextEdit>
@@ -33,21 +34,21 @@ public:
     WordProcessor(QWidget *parent = nullptr) : QMainWindow(parent) {
     setupPageCanvas();
     setupToolBar();
-    setupStatusBar();
+    setupStatusBar(); // <-- Move this up here!
 
     updateWindowTitle();
     setWindowIcon(QIcon(":/icon.ico"));
     resize(1000, 750);
 
-    updatePageSize();
+    updatePageSize(); // Now zoomSpinBox exists and can be read safely!
     saveUndoState();
 
     connect(editor, &QTextEdit::textChanged, this, &WordProcessor::updateWordCount);
     connect(editor, &QTextEdit::cursorPositionChanged, this, &WordProcessor::updateFormatToolbar);
 
-    // Reset the modified flag so a fresh launch starts completely clean
     editor->document()->setModified(false);
 }
+
 
 protected:
     void closeEvent(QCloseEvent *event) override {
@@ -58,7 +59,33 @@ protected:
         }
     }
 
+    protected:
     bool eventFilter(QObject *obj, QEvent *event) override {
+        // --- NEW: Handle Ctrl + Mouse Wheel Zooming ---
+        if (obj == editor && event->type() == QEvent::Wheel) {
+            QWheelEvent *wheelEvent = static_cast<QWheelEvent*>(event);
+            
+            // Check if the Ctrl key is being held down
+            if (wheelEvent->modifiers() & Qt::ControlModifier) {
+                int delta = wheelEvent->angleDelta().y();
+                int currentZoom = zoomSpinBox->value();
+
+                if (delta > 0) {
+                    // Scroll Up = Zoom In (up to maximum 300%)
+                    if (currentZoom < zoomSpinBox->maximum()) {
+                        zoomSpinBox->setValue(currentZoom + 10);
+                    }
+                } else if (delta < 0) {
+                    // Scroll Down = Zoom Out (down to minimum 50%)
+                    if (currentZoom > zoomSpinBox->minimum()) {
+                        zoomSpinBox->setValue(currentZoom - 10);
+                    }
+                }
+                return true; // Intercept event so the page doesn't scroll vertically while zooming
+            }
+        }
+
+        // --- Your Existing Keypress Space/Return Undo State Code ---
         if (obj == editor && event->type() == QEvent::KeyPress) {
             QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
             int key = keyEvent->key();
@@ -72,6 +99,7 @@ protected:
         return QMainWindow::eventFilter(obj, event);
     }
 
+
 private:
     QTextEdit *editor;
     QScrollArea *scrollArea;
@@ -79,6 +107,10 @@ private:
 
     QDoubleSpinBox *pageWidthSpinBox;
     QDoubleSpinBox *pageHeightSpinBox;
+
+    QSpinBox *zoomSpinBox = nullptr;
+    int currentZoomSteps = 0; // Tracks relative zoom steps from 100% baseline
+    const int DEFAULT_ZOOM = 100;
 
     QString currentFilePath;
     QLabel *statusLabel;
@@ -96,51 +128,81 @@ private:
     const int MAX_UNDO_LIMIT = 15;
     bool isUndoRedoOperation = false;
 
+   void setZoomLevel(int percentage) {
+    if (!zoomSpinBox) return;
+
+    // Calculate how many 10% steps we are moving (e.g., from 100% to 120% is +2 steps)
+    int targetSteps = (percentage - 100) / 10;
+    int deltaSteps = targetSteps - currentZoomSteps;
+
+    editor->zoomIn(deltaSteps);     // Direct built-in Qt function to scale all text sizes safely
+    currentZoomSteps = targetSteps; // Save our new position
+    updatePageSize();               // Instantly resize the paper dimensions to match!
+}
+
+
     void setupPageCanvas() {
-        // Off-white workspace background
-        scrollArea = new QScrollArea(this);
-        scrollArea->setWidgetResizable(true);
-        scrollArea->setAlignment(Qt::AlignCenter);
-        scrollArea->setStyleSheet("QScrollArea { background-color: #e8e8e8; border: none; }");
+    scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setAlignment(Qt::AlignCenter);
+    scrollArea->setStyleSheet("QScrollArea { background-color: #e8e8e8; border: none; }");
 
-        pageContainer = new QWidget(scrollArea);
-        pageContainer->setStyleSheet("background-color: #e8e8e8;");
+    pageContainer = new QWidget(scrollArea);
+    pageContainer->setStyleSheet("background-color: #e8e8e8;");
 
-        QVBoxLayout *containerLayout = new QVBoxLayout(pageContainer);
-        containerLayout->setAlignment(Qt::AlignCenter);
-        containerLayout->setContentsMargins(40, 40, 40, 40);
+    QVBoxLayout *containerLayout = new QVBoxLayout(pageContainer);
+    containerLayout->setAlignment(Qt::AlignCenter);
+    containerLayout->setContentsMargins(40, 40, 40, 40);
 
-        // Pure white paper sheet
-        editor = new QTextEdit(pageContainer);
-        editor->installEventFilter(this);
-        editor->setStyleSheet(
-            "QTextEdit {"
-            "   background-color: #ffffff;"
-            "   color: #111111;"
-            "   border: 1px solid #cccccc;"
-            "   padding: 20px;"
-            "}"
-        );
-        editor->document()->setDocumentMargin(20);
+    editor = new QTextEdit(pageContainer);
+    editor->installEventFilter(this);
+    
+    // --- ADD THE TWO SCROLLBAR FIXES HERE ---
+    editor->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    editor->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // ----------------------------------------
 
-        containerLayout->addWidget(editor);
-        scrollArea->setWidget(pageContainer);
-        setCentralWidget(scrollArea);
-    }
+    editor->setStyleSheet(
+        "QTextEdit {"
+        "   background-color: #ffffff;"
+        "   color: #111111;"
+        "   border: 1px solid #cccccc;"
+        "   padding: 20px;"
+        "}"
+    );
+    editor->document()->setDocumentMargin(20);
+
+    containerLayout->addWidget(editor);
+    scrollArea->setWidget(pageContainer);
+    setCentralWidget(scrollArea);
+}
+
 
     void updatePageSize() {
-        double widthCm = pageWidthSpinBox->value();
-        double heightCm = pageHeightSpinBox->value();
+    double widthCm = pageWidthSpinBox->value();
+    double heightCm = pageHeightSpinBox->value();
 
-        QScreen *screen = QGuiApplication::primaryScreen();
-        double dpiX = screen ? screen->logicalDotsPerInchX() : 96.0;
-        double dpiY = screen ? screen->logicalDotsPerInchY() : 96.0;
+    QScreen *screen = QGuiApplication::primaryScreen();
+    double dpiX = screen ? screen->logicalDotsPerInchX() : 96.0;
+    double dpiY = screen ? screen->logicalDotsPerInchY() : 96.0;
 
-        int widthPx = qRound(widthCm * (dpiX / 2.54));
-        int heightPx = qRound(heightCm * (dpiY / 2.54));
+    // 1. Calculate standard physical scale dimension pixel baseline
+    int baseWidthPx = qRound(widthCm * (dpiX / 2.54));
+    int baseHeightPx = qRound(heightCm * (dpiY / 2.54));
 
-        editor->setFixedSize(widthPx, heightPx);
-    }
+    // 2. Fetch the current zoom multiplier scale factor
+    // Handles initial boot before zoomSpinBox allocation safely
+    double zoomFactor = zoomSpinBox ? (zoomSpinBox->value() / 100.0) : 1.0;
+
+    // 3. Apply the scale directly to the fixed container boundaries
+    int zoomedWidth = qRound(baseWidthPx * zoomFactor);
+    int zoomedHeight = qRound(baseHeightPx * zoomFactor);
+
+    editor->setFixedSize(zoomedWidth, zoomedHeight);
+
+    editor->document()->setTextWidth(zoomedWidth - 40);
+}
+
 
     void saveUndoState() {
         if (isUndoRedoOperation) return;
@@ -442,14 +504,85 @@ private:
     }
 
     void setupStatusBar() {
-        statusLabel = new QLabel("Words: 0 | Characters: 0", this);
-        statusBar()->setStyleSheet(
-            "QStatusBar { background-color: #f5f5f5; color: #333333; border-top: 1px solid #dcdcdc; }"
-            "QStatusBar::item { border: none; }"
-        );
-        statusBar()->setSizeGripEnabled(false);
-        statusBar()->addWidget(statusLabel);
-    }
+    // Words and Character counts stay on the left side
+    statusLabel = new QLabel("Words: 0 | Characters: 0", this);
+    
+    statusBar()->setStyleSheet(
+        "QStatusBar { background-color: #f5f5f5; color: #333333; border-top: 1px solid #dcdcdc; }"
+        "QStatusBar::item { border: none; }"
+    );
+    statusBar()->setSizeGripEnabled(false);
+    statusBar()->addWidget(statusLabel);
+
+    // --- ZOOM CONTROLS (Permanent Widgets append from the right) ---
+    
+    // Zoom Label
+    QLabel *lblZoom = new QLabel("Zoom: ", this);
+    lblZoom->setStyleSheet("color: #333333; padding-right: 2px;");
+    statusBar()->addPermanentWidget(lblZoom);
+
+    // 1. Minus Button ("−") matching your text size toolbar design style
+    // We create a tiny clickable QLabel or QToolButton. A lightweight styled QPushButton keeps it perfectly inline.
+    QPushButton *btnDecreaseZoom = new QPushButton("−", this);
+    btnDecreaseZoom->setFixedSize(20, 22);
+    btnDecreaseZoom->setStyleSheet(
+        "QPushButton { color: #222222; background: transparent; border: none; font-weight: bold; font-size: 14px; }"
+        "QPushButton:hover { background-color: #e0e0e0; border-radius: 3px; }"
+        "QPushButton:pressed { background-color: #d0d0d0; }"
+    );
+    statusBar()->addPermanentWidget(btnDecreaseZoom);
+
+    // 2. Styled Zoom SpinBox
+    zoomSpinBox = new QSpinBox(this);
+    zoomSpinBox->setRange(50, 300);            // Allows zoom between 50% and 300%
+    zoomSpinBox->setSingleStep(10);            // Sets arrow key increments to 10
+    zoomSpinBox->setValue(DEFAULT_ZOOM);
+    zoomSpinBox->setSuffix("%");
+    zoomSpinBox->setFixedWidth(55);            // Fits the '%' character cleanly
+    zoomSpinBox->setAlignment(Qt::AlignCenter);
+    zoomSpinBox->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    zoomSpinBox->setStyleSheet(
+        "QSpinBox {"
+        "   background-color: #ffffff;"
+        "   color: #222222;"
+        "   border: 1px solid #cccccc;"
+        "   border-radius: 3px;"
+        "   padding: 2px 4px;"
+        "}"
+    );
+    statusBar()->addPermanentWidget(zoomSpinBox);
+
+    // 3. Plus Button ("+") matching your text size toolbar design style
+    QPushButton *btnIncreaseZoom = new QPushButton("+", this);
+    btnIncreaseZoom->setFixedSize(20, 22);
+    btnIncreaseZoom->setStyleSheet(
+        "QPushButton { color: #222222; background: transparent; border: none; font-weight: bold; font-size: 14px; }"
+        "QPushButton:hover { background-color: #e0e0e0; border-radius: 3px; }"
+        "QPushButton:pressed { background-color: #d0d0d0; }"
+    );
+    statusBar()->addPermanentWidget(btnIncreaseZoom);
+
+    // --- BUTTON CLICK LOGIC (Increments/Decrements of 10) ---
+    connect(btnDecreaseZoom, &QPushButton::clicked, this, [this]() {
+        if (zoomSpinBox->value() > zoomSpinBox->minimum()) {
+            zoomSpinBox->setValue(zoomSpinBox->value() - 10);
+        }
+    });
+
+    connect(btnIncreaseZoom, &QPushButton::clicked, this, [this]() {
+        if (zoomSpinBox->value() < zoomSpinBox->maximum()) {
+            zoomSpinBox->setValue(zoomSpinBox->value() + 10);
+        }
+    });
+
+    // Connect spinbox value changes straight to your zoom calculation helper
+    connect(zoomSpinBox, &QSpinBox::valueChanged, this, [this](int value) {
+        setZoomLevel(value);
+    });
+}
+
+
+
 
     void updateWordCount() {
         QString text = editor->toPlainText().trimmed();
